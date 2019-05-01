@@ -1,0 +1,294 @@
+---
+title: "ISSS603_Cust_A1"
+author: "Matthias Oh"
+date: "4 February 2019"
+output: html_document
+---
+
+##Default initialisation
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load libraries
+```{r, echo=FALSE}
+packages <- c('data.table', 'scales', 'lubridate', 'GGally', 'tidyverse', 'rfm')
+
+for(p in packages){
+  if(!require(p, character.only = T)){
+    install.packages(p)
+  }
+  library(p, character.only = T)
+}
+```
+
+##Load Dataset
+```{r, echo=FALSE}
+setwd("D:/Customer Analytics/A1/data")
+
+#Set blanks, "NA", and "NULL" values to NA.
+data <- fread("Assignment1 dataset Jan2019.csv", sep=",", na.strings=c("","NA","NULL"))
+
+str(data)
+```
+
+##Rectify Erroneous Datatypes and Recode Inconsistent Formatting.
+```{r, echo=FALSE}
+#Change from character to date data type.
+data$`Effective To Date` <- as.Date(parse_date_time(data$`Effective To Date`,'mdy'))
+```
+
+##Summary Statistics.
+```{r, echo=FALSE}
+summary(data)
+```
+
+##Check for missing values.
+```{r}
+colSums(is.na(data))
+```
+
+##Check for duplicate rows.
+```{r}
+data[duplicated(data)]
+```
+
+Check if there are multiple rows corresponding to the same Customer ID.
+Different results will result in different methods of calculating each customer's revenue contribution to the company.
+```{r}
+data[duplicated(data$Customer)]
+```
+
+##NA Cleaning Steps
+- Normalisation / Recoding.
+- Transformation.
+- Standardisation.
+
+##Feature Engineering.
+```{r}
+data <- data %>%
+  mutate(Revenue = `Monthly Premium Auto` * `Months Since Policy Inception`)
+
+head(data[,c("Monthly Premium Auto", "Months Since Policy Inception", "Revenue")])
+```
+
+##Univariate Plots - Numerical.
+```{r}
+nums <- unlist(lapply(data, is.numeric))
+
+data[, nums] %>%
+  gather() %>%
+  filter(!(key %in% c('Months Since Last Claim','Months Since Policy Inception',
+                      'Number of Open Complaints','Number of Policies'))) %>%
+  ggplot(aes(value)) +
+  geom_histogram() +
+  facet_wrap(~key, scales='free')
+```
+
+```{r}
+ints <- c('Months Since Last Claim','Months Since Policy Inception',
+          'Number of Open Complaints','Number of Policies')
+
+data[, ints] %>%
+  gather() %>%
+  ggplot(aes(value)) +
+  geom_bar() +
+  facet_wrap(~key, scales='free') +
+  scale_x_continuous(breaks = scales::pretty_breaks())
+```
+
+**Observations:**  
+1. Based on skew, there seems to be outliers for 'Customer Lifetime Value', 'Monthly Premium Auto', and 'Total Claim Amount'.
+2. There seems to be a large number of customers with 0 income, and they are likely to be unemployed.
+```{r}
+data %>%
+  select(Income, EmploymentStatus) %>%
+  filter(Income == 0) %>%
+  group_by(EmploymentStatus) %>%
+  summarise(subtotal = n())
+```
+
+##Check for Outliers - Numeric.
+```{r}
+data[, nums] %>%
+  lapply(sd)
+```
+
+##Univariate Plots - Character.
+```{r, fig.height=8, fig.width=10}
+chars <- unlist(lapply(data, is.character))
+
+data[, chars] %>%
+  gather() %>%
+  filter(!(key %in% c('Customer','Effective To Date'))) %>%
+  ggplot(aes(value)) +
+  geom_bar() +
+  facet_wrap(~key, scales='free') + 
+  theme(axis.text.x=element_text(angle=90))
+```
+
+**Observations:**
+1.Looking at historical 'Response', the sample dataset is imbalanced.
+
+##Univariate Plots - Date.
+```{r}
+data %>%
+  ggplot(aes(`Effective To Date`)) +
+  geom_freqpoly() +
+  scale_x_date(labels=date_format("%d/%m/%y"),breaks = "7 day") + 
+  theme(axis.text.x=element_text(angle=90))
+```
+
+##Multivariate Plots.
+CLV -vs- Revenue
+```{r, echo=FALSE}
+data %>%
+  ggplot(aes(x=Revenue, y=`Customer Lifetime Value`)) +
+  geom_point() +
+  geom_smooth()
+```
+
+
+```{r, echo=FALSE}
+data %>%
+  ggplot(aes(x=`Policy Type`, fill=Response)) +
+  geom_bar()
+```
+
+```{r, echo=FALSE}
+data %>%
+  group_by(`Policy Type`, Response) %>%
+  summarise(Subtotal = n()) %>%
+  mutate(Proportion = Subtotal/sum(Subtotal))
+```
+
+```{r, echo=FALSE}
+data %>%
+  ggplot(aes(x=`Sales Channel`, fill=Response)) +
+  geom_bar()
+```
+
+```{r, echo=FALSE}
+data %>%
+  group_by(`Sales Channel`, Response) %>%
+  summarise(Subtotal = n()) %>%
+  mutate(Proportion = Subtotal/sum(Subtotal))
+```
+
+```{r, echo=FALSE}
+data %>%
+  ggplot(aes(x=`Sales Channel`, y=`Monthly Premium Auto`)) +
+  geom_boxplot()
+```
+```{r, echo=FALSE}
+data %>%
+  group_by(`Sales Channel`) %>%
+  summarise(MeanPrem=mean(`Monthly Premium Auto`),
+            MedPrem=median(`Monthly Premium Auto`))
+```
+
+```{r, echo=FALSE}
+data %>%
+  ggplot(aes(x=`Policy Type`, y=`Monthly Premium Auto`)) +
+  geom_boxplot()
+```
+```{r, echo=FALSE}
+data %>%
+  group_by(`Policy Type`) %>%
+  summarise(MeanPrem=mean(`Monthly Premium Auto`),
+            MedPrem=median(`Monthly Premium Auto`))
+```
+
+##RFM
+* R: 'Months Since Policy Inception'
+* F: 'Number of Policies'
+* M: 'Monthly Premium Auto'
+```{r}
+rfm_model <- rfm_table_customer(data, customer_id = Customer, 
+                                 n_transactions = `Number of Policies`,
+                                 recency_days = `Months Since Policy Inception`,
+                                 total_revenue = `Monthly Premium Auto`,
+                                 recency_bins = 5, frequency_bins = 5,
+                                 monetary_bins = 5)
+rfm_result <- rfm_model$rfm
+head(rfm_result)
+```
+
+```{r, echo=FALSE}
+summary(rfm_result)
+```
+
+##RFM 3D Heatmap.
+```{r, echo=FALSE}
+rfm_heatmap(rfm_model)
+```
+
+**Observations:**
+1. No customers have a 'Frequency' score of 3.
+2. If <Revenue> is used as 'Monetary' of RFM, there will be a correlation between low Recency and high Monetary scores, because there will be greater premium amounts accrued over longer durations.
+3. After changing 'Monetary' to use <Monthly Premium Auto> instead, which is not a function of <Months Since Policy Inception> (thereby eliminating correlation between R and M of RFM), it was noted that all segments are similar in Monetary terms.
+
+##RFM Bar Chart.
+```{r, echo=FALSE}
+rfm_bar_chart(rfm_model)
+```
+
+##Compute Response Rate and Expected Revenue.
+```{r, echo=FALSE}
+temp <- rfm_result %>%
+  full_join(select(data,Customer, Response), 
+            by=c("customer_id"="Customer")) %>%
+  group_by(rfm_score, Response) %>%
+  summarise(NumCust = n(), Prem = sum(amount)) %>%
+  mutate(RespRate = NumCust/sum(NumCust))
+
+temp$rfm_score <- as.character(temp$rfm_score)
+
+head(temp)
+```
+
+```{r, echo=FALSE}
+temp2 <- temp %>%
+  filter(Response == "Yes") %>%
+  mutate(ERev = RespRate * Prem) %>%
+  arrange(desc(ERev))
+
+temp2
+```
+
+```{r, echo=FALSE}
+temp2 %>%
+  ggplot(aes(x=reorder(rfm_score,-ERev),y=RespRate, fill=ERev)) +
+  geom_bar(stat="identity") + 
+  theme(axis.text.x=element_text(angle=90)) +
+  scale_fill_continuous(low="blue",high="red") +
+  labs(x="RFM Score Segments",y="Response Rate",fill="Expected Revenue")
+```
+
+```{r, echo=FALSE}
+temp3 <- temp %>%
+  group_by(rfm_score) %>%
+  summarise(SegNumCust = sum(NumCust)) 
+
+temp2 <- temp2 %>%
+  inner_join(select(temp3,rfm_score,SegNumCust),by='rfm_score')
+
+head(temp2)
+```
+
+```{r, echo=FALSE}
+indexref <- length(which(cumsum(temp2$SegNumCust) < 3000)) + 1
+targetsegments <- temp2[1:indexref,]
+
+targetsegments
+```
+
+```{r, echo=FALSE}
+mean(temp2$RespRate)
+mean(targetsegments$RespRate)
+```
+
+```{r, echo=FALSE}
+write.csv(targetsegments,'targetsegments.csv')
+```
+
